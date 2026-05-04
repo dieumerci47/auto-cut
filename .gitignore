@@ -1,0 +1,21 @@
+# Dépendances & builds
+node_modules/
+dist/
+dist-ssr/
+build/
+*.tsbuildinfo
+
+# Environnement
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.qodo/
