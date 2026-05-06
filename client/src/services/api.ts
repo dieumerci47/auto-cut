@@ -65,4 +65,9 @@ export async function downloadClip(jobId: string, clipId: string): Promise<Blob>
   return data;
 }
 
+export async function exportCookies(): Promise<{ success: boolean; message: string }> {
+  const { data } = await api.post('/video/export-cookies');
+  return data;
+}
+
 export default api;
