@@ -9,7 +9,7 @@ import { Separator } from '@/components/ui/separator';
 import ClipCard from '@/components/clips/ClipCard';
 import ProcessingStatus from '@/components/processing/ProcessingStatus';
 import { useJobPolling, useFormatTime } from '@/hooks/useJobPolling';
-import { startProcessing, downloadClip, exportCookies, type ClipSuggestion } from '@/services/api';
+import { startProcessing, retryProcessing, downloadClip, exportCookies, type ClipSuggestion } from '@/services/api';
 import {
   Play,
   Zap,
@@ -80,6 +80,27 @@ export default function DashboardPage() {
       setIsStarting(false);
     }
   }, [url, clipCount, maxDuration]);
+
+  const handleRetry = useCallback(async () => {
+    if (!jobId) {
+      handleProcess();
+      return;
+    }
+    
+    setIsStarting(true);
+    setErrorMessage(null);
+    try {
+      await retryProcessing(jobId);
+    } catch (err) {
+      setErrorMessage(
+        err instanceof Error
+          ? err.message
+          : "Impossible de reprendre le traitement."
+      );
+    } finally {
+      setIsStarting(false);
+    }
+  }, [jobId, handleProcess]);
 
   const handleReset = useCallback(() => {
     setJobId(null);
@@ -199,10 +220,18 @@ export default function DashboardPage() {
                       variant="ghost"
                       size="sm"
                       className="mt-3 text-red-300 hover:text-red-200 hover:bg-red-500/10 gap-2"
-                      onClick={handleReset}
+                      onClick={handleRetry}
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
-                      Reessayer
+                      Reprendre l'analyse
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="mt-3 ml-2 text-red-300 hover:text-red-200 hover:bg-red-500/10 gap-2"
+                      onClick={handleReset}
+                    >
+                      Nouveau lien
                     </Button>
                     <Button
                       variant="outline"

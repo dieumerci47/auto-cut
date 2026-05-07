@@ -2,7 +2,7 @@ import { Router } from 'express';
 import fs from 'fs/promises';
 import path from 'path';
 import { getVideoInfo } from '../services/youtube.js';
-import { createJob, getJob, getClipPath } from '../jobs/processor.js';
+import { createJob, getJob, retryJob, getClipPath } from '../jobs/processor.js';
 import { isValidYouTubeUrl } from '../utils/helpers.js';
 
 const router = Router();
@@ -51,6 +51,20 @@ router.post('/process', async (req, res) => {
   } catch (error) {
     console.error('[Route] /process error:', error.message);
     res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/video/job/:jobId/retry
+ * Retry a failed job.
+ */
+router.post('/job/:jobId/retry', async (req, res) => {
+  try {
+    const job = await retryJob(req.params.jobId);
+    res.json(job);
+  } catch (error) {
+    console.error('[Route] /job/retry error:', error.message);
+    res.status(400).json({ error: error.message });
   }
 });
 

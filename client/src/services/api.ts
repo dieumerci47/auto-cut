@@ -53,6 +53,11 @@ export async function startProcessing(url: string, options?: {
   return data;
 }
 
+export async function retryProcessing(jobId: string): Promise<ProcessingJob> {
+  const { data } = await api.post(`/video/job/${jobId}/retry`);
+  return data;
+}
+
 export async function getJobStatus(jobId: string): Promise<ProcessingJob> {
   const { data } = await api.get(`/video/job/${jobId}`);
   return data;

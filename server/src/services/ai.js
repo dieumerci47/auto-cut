@@ -8,8 +8,10 @@ let model = null;
  */
 export function initAI(apiKey) {
   genAI = new GoogleGenerativeAI(apiKey);
-  model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
-  console.log('[AI] Gemini initialized with model: gemini-2.0-flash');
+  model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  // model = genAI.getGenerativeModel({ model: 'gemini-3-flash-live' });
+
+  console.log(`[AI] Gemini initialized with model:${model.model}`);
 }
 
 /**
@@ -33,11 +35,19 @@ export async function analyzeTranscript(videoInfo, transcript, options = {}) {
   } = options;
 
   // Build the transcript text with timestamps
-  const transcriptText = transcript
+  let transcriptText = transcript
     ? transcript.map(entry =>
         `[${formatTime(entry.start)}] ${entry.text}`
       ).join('\n')
     : 'No transcript available.';
+
+  // IMPORTANT: Limit to ~20,000 characters to stay well within Gemini Free Tier TPM limit
+  const MAX_CHARS = 7000;
+  // const MAX_CHARS = 20000;
+  if (transcriptText.length > MAX_CHARS) {
+    console.log(`[AI] Transcript too long (${transcriptText.length} chars). Truncating to ${MAX_CHARS}...`);
+    transcriptText = transcriptText.substring(0, MAX_CHARS) + '\n... [TRANSCRIPT TRUNCATED DUE TO FREE TIER LIMITS]';
+  }
 
   const prompt = `Tu es un expert en création de contenu viral pour TikTok, YouTube Shorts et Instagram Reels.
 

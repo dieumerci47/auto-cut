@@ -68,37 +68,74 @@ export async function createJob(url, options = {}, tempDir) {
 }
 
 /**
+ * Retry a failed job from where it stopped.
+ */
+export async function retryJob(jobId) {
+  const job = jobs.get(jobId);
+  if (!job) throw new Error('Job not found');
+  if (job.status !== 'error') throw new Error('Can only retry failed jobs');
+
+  // Reset error
+  job.status = 'queued';
+  job.error = null;
+  jobs.set(jobId, job);
+
+  // Restart pipeline
+  processJob(jobId, job.url, job.options, job.jobDir, job.clipsDir).catch((error) => {
+    console.error(`[Job ${jobId}] Pipeline failed during retry:`, error);
+    updateJob(jobId, {
+      status: 'error',
+      error: error.message,
+    });
+  });
+
+  return { jobId, status: 'queued', progress: job.progress };
+}
+
+/**
  * Main processing pipeline.
  */
 async function processJob(jobId, url, options, jobDir, clipsDir) {
   try {
-    // ── Step 1: Fetch video info ──
-    console.log(`[Job ${jobId}] Step 1/4: Fetching video info...`);
-    updateJob(jobId, { status: 'downloading', progress: 5 });
-
-    const videoInfo = await getVideoInfo(url);
-    updateJob(jobId, { videoInfo, progress: 10 });
-    console.log(`[Job ${jobId}] Video: "${videoInfo.title}" (${videoInfo.duration}s)`);
+    const job = jobs.get(jobId) || {};
+    let videoInfo = job.videoInfo;
+    if (!videoInfo) {
+      console.log(`[Job ${jobId}] Step 1/4: Fetching video info...`);
+      updateJob(jobId, { status: 'downloading', progress: 5 });
+      videoInfo = await getVideoInfo(url);
+      updateJob(jobId, { videoInfo, progress: 10 });
+      console.log(`[Job ${jobId}] Video: "${videoInfo.title}" (${videoInfo.duration}s)`);
+    }
 
     // ── Step 2: Download video ──
-    console.log(`[Job ${jobId}] Step 2/4: Downloading video...`);
-    const videoPath = await downloadVideo(url, jobDir, (percent) => {
-      updateJob(jobId, { progress: 10 + (percent * 0.3) }); // 10% -> 40%
-    });
-    updateJob(jobId, { progress: 40 });
-    console.log(`[Job ${jobId}] Download complete: ${videoPath}`);
+    let videoPath = job.videoPath;
+    if (!videoPath) {
+      console.log(`[Job ${jobId}] Step 2/4: Downloading video...`);
+      videoPath = await downloadVideo(url, jobDir, (percent) => {
+        updateJob(jobId, { progress: 10 + (percent * 0.3) }); // 10% -> 40%
+      });
+      updateJob(jobId, { videoPath, progress: 40 });
+      console.log(`[Job ${jobId}] Download complete: ${videoPath}`);
+    } else {
+      console.log(`[Job ${jobId}] Video already downloaded: ${videoPath}`);
+    }
 
     // ── Step 3: Extract subtitles & Analyze ──
-    console.log(`[Job ${jobId}] Step 3/4: Extracting subtitles & analyzing...`);
-    updateJob(jobId, { status: 'transcribing', progress: 45 });
+    let transcript = job.transcript;
+    if (transcript === undefined) {
+      console.log(`[Job ${jobId}] Step 3/4: Extracting subtitles & analyzing...`);
+      updateJob(jobId, { status: 'transcribing', progress: 45 });
 
-    const transcript = await extractSubtitles(url, jobDir);
-    updateJob(jobId, { progress: 50 });
+      transcript = await extractSubtitles(url, jobDir);
+      updateJob(jobId, { transcript, progress: 50 });
 
-    if (transcript) {
-      console.log(`[Job ${jobId}] Subtitles extracted: ${transcript.length} entries`);
+      if (transcript) {
+        console.log(`[Job ${jobId}] Subtitles extracted: ${transcript.length} entries`);
+      } else {
+        console.log(`[Job ${jobId}] No subtitles available, AI will use metadata only`);
+      }
     } else {
-      console.log(`[Job ${jobId}] No subtitles available, AI will use metadata only`);
+       console.log(`[Job ${jobId}] Subtitles already extracted.`);
     }
 
     // ── Step 4: AI Analysis ──
