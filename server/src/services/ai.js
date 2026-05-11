@@ -42,7 +42,7 @@ export async function analyzeTranscript(videoInfo, transcript, options = {}) {
     : 'No transcript available.';
 
   // IMPORTANT: Limit to ~20,000 characters to stay well within Gemini Free Tier TPM limit
-  const MAX_CHARS = 7000;
+  const MAX_CHARS = 20000;
   // const MAX_CHARS = 20000;
   if (transcriptText.length > MAX_CHARS) {
     console.log(`[AI] Transcript too long (${transcriptText.length} chars). Truncating to ${MAX_CHARS}...`);

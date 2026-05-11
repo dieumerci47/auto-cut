@@ -1,20 +1,22 @@
+import { useState } from 'react';
 import { useFormatTime } from '@/hooks/useJobPolling';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Download, Play, Star, Tag, Clock } from 'lucide-react';
+import { Download, Play, Star, Tag, Clock, X } from 'lucide-react';
 import type { ClipSuggestion } from '@/services/api';
 
 interface ClipCardProps {
   clip: ClipSuggestion;
   index: number;
   thumbnail?: string;
+  streamUrl?: string;
   onDownload?: () => void;
-  onPreview?: () => void;
 }
 
-export default function ClipCard({ clip, index, thumbnail, onDownload, onPreview }: ClipCardProps) {
+export default function ClipCard({ clip, index, thumbnail, streamUrl, onDownload }: ClipCardProps) {
   const formatTime = useFormatTime();
+  const [isPlaying, setIsPlaying] = useState(false);
 
   const scoreColor =
     clip.score >= 80 ? 'text-green-400' :
@@ -29,33 +31,66 @@ export default function ClipCard({ clip, index, thumbnail, onDownload, onPreview
   return (
     <Card className="group relative overflow-hidden bg-white/[0.02] border-white/5 hover:border-white/10 transition-all duration-300 hover:-translate-y-0.5">
       {/* Thumbnail / Preview */}
-      <div className="relative aspect-[9/16] max-h-[280px] bg-gradient-to-br from-white/[0.03] to-white/[0.01] overflow-hidden">
-        {thumbnail ? (
-          <img
-            src={thumbnail}
-            alt={clip.title}
-            className="w-full h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity duration-300"
+      <div className="relative aspect-[9/16] max-h-[280px] bg-black overflow-hidden flex items-center justify-center">
+        {isPlaying && streamUrl ? (
+          <video
+            src={streamUrl}
+            controls
+            autoPlay
+            className="w-full h-full object-contain"
+            onEnded={() => setIsPlaying(false)}
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[oklch(0.65_0.25_300_/_0.2)] to-[oklch(0.60_0.22_340_/_0.1)] flex items-center justify-center">
-              <Play className="w-6 h-6 text-[oklch(0.75_0.25_300)]" />
-            </div>
-          </div>
+          <>
+            {streamUrl ? (
+              <video
+                src={`${streamUrl}#t=0.1`}
+                className="w-full h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity duration-300"
+                preload="metadata"
+                muted
+                playsInline
+              />
+            ) : thumbnail ? (
+              <img
+                src={thumbnail}
+                alt={clip.title}
+                className="w-full h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity duration-300"
+              />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-white/[0.03] to-white/[0.01]">
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[oklch(0.65_0.25_300_/_0.2)] to-[oklch(0.60_0.22_340_/_0.1)] flex items-center justify-center">
+                  <Play className="w-6 h-6 text-[oklch(0.75_0.25_300)]" />
+                </div>
+              </div>
+            )}
+
+            {/* Overlay controls */}
+            {streamUrl && (
+              <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-3 z-10">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="w-full bg-white/15 backdrop-blur-md border-white/10 text-white hover:bg-white/25 text-xs"
+                  onClick={() => setIsPlaying(true)}
+                >
+                  <Play className="w-3 h-3 mr-1" />
+                  Prévisualiser
+                </Button>
+              </div>
+            )}
+          </>
         )}
 
-        {/* Overlay controls */}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-3">
+        {isPlaying && (
           <Button
-            size="sm"
-            variant="secondary"
-            className="w-full bg-white/15 backdrop-blur-md border-white/10 text-white hover:bg-white/25 text-xs"
-            onClick={onPreview}
+            size="icon"
+            variant="ghost"
+            className="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/50 text-white hover:bg-black/80 z-20"
+            onClick={() => setIsPlaying(false)}
           >
-            <Play className="w-3 h-3 mr-1" />
-            Prévisualiser
+            <X className="w-4 h-4" />
           </Button>
-        </div>
+        )}
 
         {/* Clip number badge */}
         <div className="absolute top-2 left-2">

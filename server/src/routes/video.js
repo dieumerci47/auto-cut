@@ -4,6 +4,7 @@ import path from 'path';
 import { getVideoInfo } from '../services/youtube.js';
 import { createJob, getJob, retryJob, getClipPath } from '../jobs/processor.js';
 import { isValidYouTubeUrl } from '../utils/helpers.js';
+import { supabase } from '../services/supabase.js';
 
 const router = Router();
 const TEMP_DIR = process.env.TEMP_DIR || './temp';
@@ -72,11 +73,46 @@ router.post('/job/:jobId/retry', async (req, res) => {
  * GET /api/video/job/:jobId
  * Get the status of a processing job.
  */
-router.get('/job/:jobId', (req, res) => {
+router.get('/job/:jobId', async (req, res) => {
   const job = getJob(req.params.jobId);
 
   if (!job) {
-    return res.status(404).json({ error: 'Job not found' });
+    // Check if it exists in Supabase
+    const { data: dbJob, error } = await supabase
+      .from('jobs')
+      .select(`
+        id, video_url, title, thumbnail, status, error, created_at,
+        clips (
+          id, clip_index, title, hook, start_time, end_time, duration, score, reason, tags, s3_url
+        )
+      `)
+      .eq('id', req.params.jobId)
+      .single();
+
+    if (!dbJob || error) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    // Map to the expected format
+    return res.json({
+      jobId: dbJob.id,
+      status: dbJob.status,
+      progress: 100,
+      videoInfo: { title: dbJob.title, thumbnail: dbJob.thumbnail, id: dbJob.video_url?.split('v=')[1] },
+      clips: dbJob.clips.map(c => ({
+        id: String(c.clip_index),
+        title: c.title,
+        hook: c.hook,
+        startTime: c.start_time,
+        endTime: c.end_time,
+        duration: c.duration,
+        score: c.score,
+        reason: c.reason,
+        tags: c.tags,
+        streamUrl: c.s3_url
+      })).sort((a, b) => b.score - a.score),
+      error: dbJob.error,
+    });
   }
 
   // Return job status without internal paths
@@ -115,6 +151,34 @@ router.get('/clip/:jobId/:clipId', async (req, res) => {
     stream.pipe(res);
   } catch (error) {
     console.error('[Route] /clip error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/video/stream/:jobId/:clipId
+ * Stream a generated clip for preview.
+ */
+router.get('/stream/:jobId/:clipId', async (req, res) => {
+  try {
+    const { jobId, clipId } = req.params;
+    const clipPath = getClipPath(jobId, clipId);
+
+    if (!clipPath) {
+      return res.status(404).json({ error: 'Clip not found' });
+    }
+
+    // Verify file exists
+    await fs.access(clipPath);
+
+    res.setHeader('Content-Disposition', `inline`);
+    res.setHeader('Content-Type', 'video/mp4');
+
+    const { createReadStream } = await import('fs');
+    const stream = createReadStream(clipPath);
+    stream.pipe(res);
+  } catch (error) {
+    console.error('[Route] /stream error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });

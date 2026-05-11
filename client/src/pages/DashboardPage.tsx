@@ -10,6 +10,7 @@ import ClipCard from '@/components/clips/ClipCard';
 import ProcessingStatus from '@/components/processing/ProcessingStatus';
 import { useJobPolling, useFormatTime } from '@/hooks/useJobPolling';
 import { startProcessing, retryProcessing, downloadClip, exportCookies, type ClipSuggestion } from '@/services/api';
+import { supabase } from '../services/supabase';
 import {
   Play,
   Zap,
@@ -45,9 +46,48 @@ export default function DashboardPage() {
   const [selectedPlatform, setSelectedPlatform] = useState('TikTok');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const [history, setHistory] = useState<any[]>([]);
   const formatTime = useFormatTime();
 
   const { job, error: pollingError } = useJobPolling(jobId);
+
+  // Load history from Supabase
+  useEffect(() => {
+    async function fetchHistory() {
+      const { data: jobsData, error } = await supabase
+        .from('jobs')
+        .select(`
+          id, video_url, title, thumbnail, status, created_at,
+          clips (
+            id, clip_index, title, hook, start_time, end_time, duration, score, reason, tags, s3_url
+          )
+        `)
+        .eq('status', 'done')
+        .order('created_at', { ascending: false })
+        .limit(10);
+        
+      if (error) {
+        console.error('Failed to load history', error);
+        return;
+      }
+      
+      if (jobsData) {
+        setHistory(jobsData.map(j => ({
+          jobId: j.id,
+          videoInfo: { title: j.title, thumbnail: j.thumbnail, id: j.video_url.split('v=')[1] },
+          clips: j.clips.map((c: any) => ({
+            ...c,
+            id: String(c.clip_index),
+            streamUrl: c.s3_url
+          }))
+        })));
+      }
+    }
+    
+    if (!jobId) {
+      fetchHistory();
+    }
+  }, [jobId]);
 
   // Show error from polling
   useEffect(() => {
@@ -105,6 +145,7 @@ export default function DashboardPage() {
   const handleReset = useCallback(() => {
     setJobId(null);
     setErrorMessage(null);
+    setUrl('');
   }, []);
 
   const handlePlatformSelect = useCallback((platform: typeof PLATFORMS[number]) => {
@@ -114,10 +155,12 @@ export default function DashboardPage() {
     }
   }, []);
 
-  const handleDownloadClip = useCallback(async (clipId: string) => {
-    if (!jobId) return;
+  const handleDownloadClip = useCallback(async (clipUrl: string, clipId: string) => {
+    if (!clipUrl) return;
     try {
-      const blob = await downloadClip(jobId, clipId);
+      const response = await fetch(clipUrl);
+      if (!response.ok) throw new Error('Download failed');
+      const blob = await response.blob();
       const downloadUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = downloadUrl;
@@ -127,7 +170,7 @@ export default function DashboardPage() {
     } catch {
       // Silently fail
     }
-  }, [jobId]);
+  }, []);
 
   const handleExportCookies = useCallback(async () => {
     setIsExporting(true);
@@ -158,13 +201,15 @@ export default function DashboardPage() {
   return (
     <div className="min-h-[calc(100vh-4rem)] px-4 md:px-6 py-8 max-w-7xl mx-auto">
       {/* Header */}
-      <div className="mb-8 space-y-1 animate-fade-in-up" style={{ opacity: 0, animationDelay: '0.1s' }}>
-        <h1 className="text-2xl md:text-3xl font-bold tracking-tight">
-          Dashboard <span className="gradient-text">AutoCut</span>
-        </h1>
-        <p className="text-muted-foreground text-sm">
-          Colle un lien YouTube et laisse l&apos;IA faire le travail.
-        </p>
+      <div className="mb-8 flex items-center justify-between animate-fade-in-up" style={{ opacity: 0, animationDelay: '0.1s' }}>
+        <div className="space-y-1">
+          <h1 className="text-2xl md:text-3xl font-bold tracking-tight">
+            Dashboard <span className="gradient-text">AutoCut</span>
+          </h1>
+          <p className="text-muted-foreground text-sm">
+            Colle un lien YouTube et laisse l&apos;IA faire le travail.
+          </p>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
@@ -330,7 +375,8 @@ export default function DashboardPage() {
                     key={clip.id}
                     clip={clip}
                     index={index}
-                    onDownload={() => handleDownloadClip(clip.id)}
+                    onDownload={() => handleDownloadClip(clip.streamUrl, clip.id)}
+                    streamUrl={clip.streamUrl || undefined}
                   />
                 ))}
               </div>
@@ -348,6 +394,55 @@ export default function DashboardPage() {
                 Colle un lien YouTube ci-dessus pour commencer.
                 L&apos;IA analysera la video et generera les meilleurs clips.
               </p>
+            </div>
+          )}
+
+          {/* History Section */}
+          {!isProcessing && !videoInfo && history.length > 0 && (
+            <div className="space-y-4 animate-fade-in-up mt-8" style={{ opacity: 0, animationDelay: '0.3s' }}>
+              <div className="flex items-center gap-2">
+                <Clock className="w-4 h-4 text-muted-foreground" />
+                <h2 className="text-lg font-semibold">Historique récent</h2>
+              </div>
+              <div className="space-y-4">
+                {history.slice(0, 3).map((hJob, idx) => (
+                  <Card key={hJob.jobId || idx} className="bg-white/[0.02] border-white/5 hover:border-white/10 transition-colors">
+                    <CardContent className="p-4">
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-4 min-w-0">
+                          <div className="w-16 h-10 rounded bg-white/5 flex items-center justify-center shrink-0 overflow-hidden">
+                            {hJob.videoInfo?.thumbnail ? (
+                              <img src={hJob.videoInfo.thumbnail} alt="" className="w-full h-full object-cover" />
+                            ) : (
+                              <Play className="w-4 h-4 text-white/30" />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <h4 className="font-medium text-sm line-clamp-1">{hJob.videoInfo?.title || 'Video inconnue'}</h4>
+                            <p className="text-xs text-muted-foreground mt-0.5">{hJob.clips?.length || 0} clips generes</p>
+                          </div>
+                        </div>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => {
+                            window.location.href = `/history?jobId=${hJob.jobId}`;
+                          }}
+                        >
+                          Reprendre
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+              {history.length > 3 && (
+                <div className="mt-4 flex justify-center">
+                  <Button variant="ghost" className="text-sm text-muted-foreground hover:text-white" onClick={() => window.location.href = '/history'}>
+                    Voir tout l'historique
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -4,6 +4,7 @@ import { Link, useLocation } from 'react-router-dom';
 const navLinks = [
   { label: 'Accueil', path: '/' },
   { label: 'Dashboard', path: '/dashboard' },
+  { label: 'Historique', path: '/history' },
 ];
 
 export default function Navbar() {

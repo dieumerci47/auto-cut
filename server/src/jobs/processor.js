@@ -1,8 +1,10 @@
+import fs from 'fs';
 import path from 'path';
 import { getVideoInfo, downloadVideo, extractSubtitles } from '../services/youtube.js';
 import { analyzeTranscript } from '../services/ai.js';
 import { cutAllClips } from '../services/video.js';
 import { generateJobId, ensureDir } from '../utils/helpers.js';
+import { supabase } from '../services/supabase.js';
 
 // In-memory job store (in production, use Redis or a database)
 const jobs = new Map();
@@ -22,6 +24,17 @@ function updateJob(jobId, updates) {
   if (job) {
     Object.assign(job, updates);
     jobs.set(jobId, job);
+
+    if (updates.status || updates.error || updates.videoInfo) {
+      supabase.from('jobs').update({
+        status: job.status,
+        error: job.error,
+        title: job.videoInfo?.title,
+        thumbnail: job.videoInfo?.thumbnail
+      }).eq('id', jobId).then(({error}) => {
+        if (error) console.error('[Supabase] Update job error:', error.message);
+      });
+    }
   }
 }
 
@@ -54,6 +67,15 @@ export async function createJob(url, options = {}, tempDir) {
   };
 
   jobs.set(jobId, job);
+
+  // Create in Supabase
+  supabase.from('jobs').insert({
+    id: jobId,
+    video_url: url,
+    status: 'queued',
+  }).then(({error}) => {
+    if (error) console.error('[Supabase] Create job error:', error.message);
+  });
 
   // Start async processing pipeline
   processJob(jobId, url, options, jobDir, clipsDir).catch((error) => {
@@ -161,14 +183,74 @@ async function processJob(jobId, url, options, jobDir, clipsDir) {
       updateJob(jobId, { progress: Math.round(cutProgress) });
     });
 
-    // Store clip paths
+    // ── Step 6: Upload to Supabase ──
+    console.log(`[Job ${jobId}] Step 5/5: Uploading clips to Supabase...`);
+    updateJob(jobId, { status: 'uploading', progress: 90 });
+
+    for (let i = 0; i < clips.length; i++) {
+      const clipInfo = clips[i];
+      const clipResult = clipResults.find(r => r.clipId === clipInfo.id);
+      
+      if (clipResult && clipResult.success && clipResult.path) {
+        try {
+          const fileData = await fs.promises.readFile(clipResult.path);
+          const fileName = `${jobId}/clip_${clipInfo.id}.mp4`;
+          
+          const { error: uploadError } = await supabase.storage
+            .from('clips')
+            .upload(fileName, fileData, {
+              contentType: 'video/mp4',
+              upsert: true
+            });
+            
+          if (uploadError) throw uploadError;
+          
+          const { data: publicUrlData } = supabase.storage
+            .from('clips')
+            .getPublicUrl(fileName);
+            
+          const s3Url = publicUrlData.publicUrl;
+          
+          // Insert into clips DB
+          await supabase.from('clips').insert({
+            job_id: jobId,
+            clip_index: parseInt(clipInfo.id),
+            title: clipInfo.title,
+            hook: clipInfo.hook,
+            start_time: clipInfo.startTime,
+            end_time: clipInfo.endTime,
+            duration: clipInfo.duration,
+            score: clipInfo.score,
+            reason: clipInfo.reason,
+            tags: clipInfo.tags,
+            s3_url: s3Url
+          });
+          
+          // Attach S3 URL to in-memory clip
+          clipInfo.streamUrl = s3Url;
+        } catch (err) {
+          console.error(`[Supabase] Upload failed for clip ${clipInfo.id}:`, err.message);
+        }
+      }
+    }
+
+    // Store clip paths and finalize
     updateJob(jobId, {
       status: 'done',
       progress: 100,
       clipPaths: clipResults,
+      clips: clips // now contains streamUrl
     });
 
     console.log(`[Job ${jobId}] ✅ Pipeline complete! ${clipResults.filter(r => r.success).length}/${clips.length} clips generated.`);
+
+    // Cleanup local files
+    try {
+      await fs.promises.rm(jobDir, { recursive: true, force: true });
+      console.log(`[Job ${jobId}] 🗑️ Cleaned up temp files.`);
+    } catch (err) {
+      console.error(`[Job ${jobId}] ⚠️ Failed to clean up temp files:`, err.message);
+    }
 
   } catch (error) {
     console.error(`[Job ${jobId}] ❌ Pipeline error:`, error);
@@ -184,10 +266,19 @@ async function processJob(jobId, url, options, jobDir, clipsDir) {
  */
 export function getClipPath(jobId, clipId) {
   const job = jobs.get(jobId);
-  if (!job || !job.clipPaths) return null;
+  if (job && job.clipPaths) {
+    const clipResult = job.clipPaths.find(r => r.clipId === clipId);
+    if (clipResult?.path) return clipResult.path;
+  }
 
-  const clipResult = job.clipPaths.find(r => r.clipId === clipId);
-  return clipResult?.path || null;
+  // Fallback if server restarted but files exist
+  const tempDir = process.env.TEMP_DIR || './temp';
+  const guessedPath = path.resolve(tempDir, jobId, 'clips', `clip_${clipId}.mp4`);
+  if (fs.existsSync(guessedPath)) {
+    return guessedPath;
+  }
+
+  return null;
 }
 
 /**
